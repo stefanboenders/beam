@@ -453,31 +453,35 @@ class _PubSubReadEvaluator(_TransformEvaluator):
     # the DirectRunner currently doesn't retry work items anyway, so the
     # pipeline would enter an inconsistent state on any error.
     sub_client = pubsub.SubscriberClient()
-    response = sub_client.pull(self._sub_name, max_messages=10,
-                               return_immediately=True)
+    try:
+      response = sub_client.pull(self._sub_name, max_messages=10,
+                                 return_immediately=True)
 
-    def _get_element(message):
-      parsed_message = PubsubMessage._from_message(message)
-      if (timestamp_attribute and
-          timestamp_attribute in parsed_message.attributes):
-        rfc3339_or_milli = parsed_message.attributes[timestamp_attribute]
-        try:
-          timestamp = Timestamp.from_rfc3339(rfc3339_or_milli)
-        except ValueError:
+      def _get_element(message):
+        parsed_message = PubsubMessage._from_message(message)
+        if (timestamp_attribute and
+            timestamp_attribute in parsed_message.attributes):
+          rfc3339_or_milli = parsed_message.attributes[timestamp_attribute]
           try:
-            timestamp = Timestamp(micros=int(rfc3339_or_milli) * 1000)
-          except ValueError as e:
-            raise ValueError('Bad timestamp value: %s' % e)
-      else:
-        timestamp = Timestamp(message.publish_time.seconds,
-                              message.publish_time.nanos // 1000)
+            timestamp = Timestamp.from_rfc3339(rfc3339_or_milli)
+          except ValueError:
+            try:
+              timestamp = Timestamp(micros=int(rfc3339_or_milli) * 1000)
+            except ValueError as e:
+              raise ValueError('Bad timestamp value: %s' % e)
+        else:
+          timestamp = Timestamp(message.publish_time.seconds,
+                                message.publish_time.nanos // 1000)
 
-      return timestamp, parsed_message
+        return timestamp, parsed_message
 
-    results = [_get_element(rm.message) for rm in response.received_messages]
-    ack_ids = [rm.ack_id for rm in response.received_messages]
-    if ack_ids:
-      sub_client.acknowledge(self._sub_name, ack_ids)
+      results = [_get_element(rm.message) for rm in response.received_messages]
+      ack_ids = [rm.ack_id for rm in response.received_messages]
+      if ack_ids:
+        sub_client.acknowledge(self._sub_name, ack_ids)
+    finally:
+      if sub_client.api.transport._channel:
+        sub_client.api.transport._channel.close()
 
     return results
 
